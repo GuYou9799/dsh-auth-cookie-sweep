@@ -16,4 +16,4 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Unit and integration tests
-        run: node --test test/purge.test.mjs test/integration.test.mjs
+        run: node --test test/purge.test.mjs test/integration.test.mjs test/package-manifest.test.mjs

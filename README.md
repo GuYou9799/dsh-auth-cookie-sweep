@@ -153,12 +153,14 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 ### 开发
 
 ```bash
-node --test test/purge.test.mjs test/integration.test.mjs   # 零依赖的单元 + 集成测试
+npm test        # 零依赖的单元 + 集成 + 包清单测试（21 项）
 ```
 
 `test/purge.test.mjs` 覆盖工具函数与 `writeHead` 合并的各种形态；
 `test/integration.test.mjs` 用真实 `node:http` 服务器模拟 300 次启动（每次一个新 authority），
-断言 jar 始终 ≤ 4 条、请求头始终 < 2 KiB，并在单个响应内修复一个 20 条 cookie 的中毒 jar。
+断言 jar 始终 ≤ 4 条、请求头始终 < 2 KiB，并在单个响应内修复一个 20 条 cookie 的中毒 jar；
+`test/package-manifest.test.mjs` 用与插件市场相同的严格解析器校验 `cordis.patch.yml`
+（只允许纯 `id`/`name` 的 `- insert:` 行），防止打包后再出现“已安装但重启也不生效”。
 
 已在 DeepSeek Harness `0.2.2-rc.1` 上做过实际验证（真实 `dsh-host-webserver`、固定端口）：
 
@@ -330,13 +332,16 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 ### Development
 
 ```bash
-node --test test/purge.test.mjs test/integration.test.mjs   # dependency-free unit + integration tests
+npm test        # dependency-free unit + integration + package-manifest tests (21 cases)
 ```
 
 `test/purge.test.mjs` covers the helpers and the `writeHead` merge variants;
 `test/integration.test.mjs` runs a real `node:http` server and simulates 300 launches with a fresh
 authority each time, asserting the jar stays ≤ 4 cookies and the header stays < 2 KiB — then
 rehabilitates a 20-cookie poisoned jar in a single response.
+`test/package-manifest.test.mjs` validates `cordis.patch.yml` with the same strict parser the plugin
+market uses (plain `id`/`name` insert rows only), so a published tarball can never again install as
+"installed, but still waiting for a restart".
 
 Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port, real
 `dsh-host-webserver`):

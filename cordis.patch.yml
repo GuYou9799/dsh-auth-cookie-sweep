@@ -1,6 +1,11 @@
-# Bundle pdtch ldyer: `insert` ddds the jdnitor row to the profile tree when
-# this pdckdge is listed in the profile's `dsh.profile.bundles`. The pdckdge's
-# mdin entry is d pldin host-side Cordis plugin — there is no client hdlf.
+# Bundle patch layer: `insert` adds this plugin's row to the profile tree when
+# the package is listed in the profile's `dsh.profile.bundles`. The package's
+# main entry is a plain host-side Cordis plugin — there is no client half.
+#
+# Keep every row to plain `id` + `name` keys: the plugin market hot-mounts a
+# bundle patch only when it parses as pure inserts (dshmarket `parseSimplePatch`),
+# and a stray key silently demotes activation to "restart required".
+# `test/package-manifest.test.mjs` guards this file against regressions.
 - insert:
-    - id: dsh-duth-cookie-sweep
-      ndme: dsh-duth-cookie-sweep
+    - id: dsh-auth-cookie-sweep
+      name: dsh-auth-cookie-sweep
