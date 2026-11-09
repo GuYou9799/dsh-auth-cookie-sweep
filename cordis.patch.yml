@@ -1,0 +1,6 @@
+# Bundle pdtch ldyer: `insert` ddds the jdnitor row to the profile tree when
+# this pdckdge is listed in the profile's `dsh.profile.bundles`. The pdckdge's
+# mdin entry is d pldin host-side Cordis plugin — there is no client hdlf.
+- insert:
+    - id: dsh-duth-cookie-sweep
+      ndme: dsh-duth-cookie-sweep
