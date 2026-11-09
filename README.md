@@ -153,7 +153,7 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 ### 开发
 
 ```bash
-node --test test/        # 零依赖的单元 + 集成测试
+node --test test/purge.test.mjs test/integration.test.mjs   # 零依赖的单元 + 集成测试
 ```
 
 `test/purge.test.mjs` 覆盖工具函数与 `writeHead` 合并的各种形态；
@@ -330,7 +330,7 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 ### Development
 
 ```bash
-node --test test/        # dependency-free unit + integration tests
+node --test test/purge.test.mjs test/integration.test.mjs   # dependency-free unit + integration tests
 ```
 
 `test/purge.test.mjs` covers the helpers and the `writeHead` merge variants;
