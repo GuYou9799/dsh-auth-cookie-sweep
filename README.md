@@ -20,6 +20,7 @@
 - 不需要改 app.asar，不需要重新打包 Electron
 - 没有存储、没有前端 bundle、不联网
 - DSH 升级后依然有效（只依赖公开的 `webServer` 服务）
+- 已经卡死在 `431` 的 profile 也能救回来：放宽请求头额度，在同一次启动里清完旧 cookie
 - 测试套件零依赖
 
 ### cookie 为什么会累积
@@ -37,7 +38,14 @@
 
 ### 插件做了什么
 
-它挂在 **Host 进程**里，包装响应路径上最后一处还能动手的地方：`ServerResponse.writeHead`。
+它挂在 **Host 进程**里，分两步：先放宽请求头的额度，让「已经中毒」的 jar 能进得来人，再在这一次
+响应里把旧 cookie 全部清掉。
+
+**1. 救援额度。** Node 在解析阶段就按默认 16 KiB 拒绝请求，此时任何 JavaScript（Host 自己的 handler
+和插件）都还没运行。插件在 `webServer` 已监听之后（`inject` 保证的顺序）把
+`server.maxHeaderSize` 提到 128 KiB，于是那条原本会被 `431` 拒绝的启动请求能抵达 Host。
+
+**2. 响应侧清理。** 包装响应路径上最后一处还能动手的地方：`ServerResponse.writeHead`。
 对每个进来的请求它
 
 1. 读取 `Cookie` 头与请求的 authority（HTTP 为 `host[:port]`，HTTPS 为
@@ -104,10 +112,13 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 请通过应用内的插件管理器 / 插件市场安装，或自行把依赖与 bundle 条目加到
 `~/.dsh/profiles/desktop/package.json` 后重启 DSH。
 
-#### 已经打不开了怎么办
+#### 已经打不开了怎么办（431 / `Web authentication failed`）
 
-插件无法拯救**已经**超过 16 KiB 的 jar：Node 在解析阶段就拒绝了请求，任何 JavaScript（无论
-插件还是 Host）都不会被执行。需要先手工清一次 cookie，之后插件会把它长期压住：
+**0.2.0 起不用再手工清。** 上面的救援额度会让那条原本被拒的请求进到 Host，清理又在同一个响应里
+完成，所以装好插件、重启一次 DSH，jar 就回到 1 条。
+
+只有这两种情况还需要手工处理：用的是 0.2.0 之前的版本，或者把 `maxHeaderBytes` 设成了 `0`。
+做法是清一次 cookie，之后由插件长期压住：
 
 - **浏览器：** 开发者工具 → Application → Cookies → `http://127.0.0.1:<端口>` → 删除所有
   `dsh-auth-*`（或对该 origin 执行「清除站点数据」）。
@@ -126,7 +137,8 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
       config:
         minStaleCookies: 3         # 1..256，达到多少条外来 cookie 才清理
         maxCookieHeaderBytes: 4096 # 512..16384，请求头多大就立刻清理
-        maxDeletions: 64           # 1..512，单次响应最多下发多少条过期指令
+        maxDeletions: 256          # 1..512，单次响应最多下发多少条过期指令
+        maxHeaderBytes: 131072     # 0..1048576，救援额度；0 关闭（不再修已锁死的 jar）
         secure: false              # 省略则自动跟随 Host 协议
 ```
 
@@ -136,8 +148,12 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 
 - `lib/index.js` —— Cordis 插件：`name`、`inject: ["webServer"]`、`apply(ctx, config)`。
   `inject` 保证插件只在 `webServer[Service.init]` 创建并绑定 `node:http` 服务器**之后**激活，
-  因此 `ctx.webServer.server` 一定已存在。它用 `prependListener` 挂 `request` 监听，并通过
-  `ctx.effect(...)` 在插件卸载时移除。
+  因此 `ctx.webServer.server` 一定已存在。它先调 `applyHeaderBudget(...)`，再用 `prependListener`
+  挂 `request` 监听；`ctx.effect(...)` 在插件卸载时移除监听并**还原**原来的 `maxHeaderSize`，
+  额度不会永久留在进程里。
+- `lib/header-budget.js` —— 救援额度。Node 在构造每个连接的解析器时读取
+  `server.maxHeaderSize`，因此对一个已经 `listen()` 的服务器赋值同样生效（Node 24 实测）。
+  默认 128 KiB，有界、可配置、可还原。
 - `lib/purge.js` —— 零依赖工具函数：authority 推导、cookie 名推导（与
   `dsh-client-connection` 逐字节一致）、陈旧判定、阈值策略，以及 `writeHead` 包装（兼容
   `(status, headers)`、`(status, message, headers)`、数组对形式的 headers，并合并
@@ -146,17 +162,22 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 
 #### 局限
 
-- 对已经被 Node 以 `431` 拒绝的请求无能为力（见「已经打不开了怎么办」）。
+- 救援额度的上限是 1 MiB（默认 128 KiB）。若 jar 大到连放宽后的额度都超过（约 600 次连续
+  启动、且从未清理过），仍需按上一节手工清一次。
 - 只能过期到达本 Host 的 cookie；其它 origin / profile 的 jar 归它们自己管理。
 - 浏览器对单域名的 cookie 数量也有上限；本插件会把数量压得足够低，使该上限不会成为新的症状。
 
 ### 开发
 
 ```bash
-npm test        # 零依赖的单元 + 集成 + 包清单测试（21 项）
+npm test        # 零依赖的单元 + 集成 + 包清单测试（31 项）
 ```
 
 `test/purge.test.mjs` 覆盖工具函数与 `writeHead` 合并的各种形态；
+`test/header-budget.test.mjs` 覆盖额度的设置、还原（删除属性即回到 Node 默认）与非法取值；
+`test/recovery.test.mjs` 用真实 `node:http` 服务器复现完整故障：150 条 cookie（约 17.7 KiB）
+先拿到 `431`，放宽额度后同一条请求变成 `303` + 150 条 `Max-Age=0`，下一次启动只剩 1 条，
+而卸载插件后同样的请求又回到 `431`；
 `test/integration.test.mjs` 用真实 `node:http` 服务器模拟 300 次启动（每次一个新 authority），
 断言 jar 始终 ≤ 4 条、请求头始终 < 2 KiB，并在单个响应内修复一个 20 条 cookie 的中毒 jar；
 `test/package-manifest.test.mjs` 用与插件市场相同的严格解析器校验 `cordis.patch.yml`
@@ -172,6 +193,7 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（21 项）
 | 已认证的后续请求 | `200` |
 | 合法 cookie + 20 条外来 | `200` + 20 条 `Max-Age=0` |
 | 1 条外来 + 5 KiB 请求头 | 触发清理（字节阈值） |
+| 150 条 cookie（17.7 KiB）+ 合法 `?token=` | `303` + 150 条 `Max-Age=0`，下一次请求 `200`（已锁死恢复） |
 
 ### 许可证
 
@@ -192,6 +214,8 @@ Symptom it fixes: after a few dozen launches, DSH stops opening — the web UI r
 - No app.asar surgery, no patched Electron build
 - No storage, no client bundle, no network access
 - Keeps working across DSH updates (it only uses the public `webServer` service)
+- Rescues a profile already stuck at `431`: the request-header budget is raised and the old cookies
+  are expired during that same launch
 - Test suite has no dependencies
 
 ### Why the cookies accumulate
@@ -210,8 +234,16 @@ permanent and why deleting the session does not help.
 
 ### What the plugin does
 
-It mounts in the **Host** process and wraps the one place where a response is still under our
-control: `ServerResponse.writeHead`. For every incoming request it
+It mounts in the **Host** process and works in two steps: first it raises the request-header budget so
+an already-poisoned jar can reach the Host at all, then it cleans that jar up in the very response.
+
+**1. Rescue budget.** Node rejects the request at parse time — before any JavaScript (the Host's own
+handlers and this plugin alike) runs. Once `webServer` is listening (guaranteed by `inject`), the
+plugin sets `server.maxHeaderSize` to 128 KiB, so the launch request that used to die with `431`
+reaches the Host.
+
+**2. Response-side sweep.** It wraps the one place where a response is still under our control:
+`ServerResponse.writeHead`. For every incoming request it
 
 1. reads the `Cookie` header and the request's authority (`host[:port]` for HTTP,
    `scheme://host[:port]` for HTTPS — the same normalisation the Host uses),
@@ -282,9 +314,12 @@ and the bundle entry to `~/.dsh/profiles/desktop/package.json` yourself and rest
 
 #### Already broken?
 
-The plugin cannot rescue a jar that is **already** over 16 KiB: Node parses and rejects the header
-before any handler runs, so no JavaScript (plugin or Host) ever sees the request. Clear the
-cookies once — after that the sweeper keeps the jar small:
+**Since 0.2.0 you do not have to clear anything by hand.** The rescue budget lets the rejected
+request through, and the sweep finishes in that same response, so one restart after installing the
+plugin brings the jar back to a single cookie.
+
+Two cases still need a manual clean: a version before 0.2.0, or `maxHeaderBytes` set to `0`. Clear
+the cookies once — after that the sweeper keeps the jar small:
 
 - **Browser:** DevTools → Application → Cookies → `http://127.0.0.1:<port>` → delete every
   `dsh-auth-*` entry (or "Clear site data" for that origin).
@@ -303,7 +338,8 @@ Optional `config` on the bundle's `insert` row:
       config:
         minStaleCookies: 3        # 1..256, foreign cookies before cleaning
         maxCookieHeaderBytes: 4096 # 512..16384, clean as soon as the header is this big
-        maxDeletions: 64          # 1..512, expiries per response
+        maxDeletions: 256         # 1..512, expiries per response
+        maxHeaderBytes: 131072    # 0..1048576, rescue budget; 0 disables rescue
         secure: false             # omit to follow the Host protocol automatically
 ```
 
@@ -313,8 +349,13 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 
 - `lib/index.js` — the Cordis plugin: `name`, `inject: ["webServer"]`, `apply(ctx, config)`.
   `inject` guarantees the plugin only activates **after** `webServer[Service.init]` created and
-  bound the `node:http` server, so `ctx.webServer.server` is present. It adds a `request` listener
-  with `prependListener` and removes it through `ctx.effect(...)` when the plugin unloads.
+  bound the `node:http` server, so `ctx.webServer.server` is present. It calls
+  `applyHeaderBudget(...)` first, then adds a `request` listener with `prependListener`; one
+  `ctx.effect(...)` disposer removes the listener and **restores** the previous `maxHeaderSize`, so
+  the budget never lingers in the process.
+- `lib/header-budget.js` — the rescue budget. Node reads `server.maxHeaderSize` when it builds a
+  connection's parser, so assigning it on a server that is already listening takes effect (verified
+  on Node 24). 128 KiB by default: bounded, configurable, restorable.
 - `lib/purge.js` — dependency-free helpers: authority derivation, cookie-name derivation
   (byte-compatible with `dsh-client-connection`), stale detection, threshold policy, and the
   `writeHead` wrapper (handles `(status, headers)`, `(status, message, headers)`, array-of-pairs
@@ -324,7 +365,8 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 
 #### Limitations
 
-- Cannot help a request whose header Node already rejected with `431` (see *Already broken?*).
+- The rescue budget tops out at 1 MiB (128 KiB by default). A jar larger than even the raised budget
+  (~600 launches in a row, never cleaned) still needs the manual clear above.
 - Only expires cookies that arrive at this Host; other origins/profiles keep their own jars.
 - Browsers also cap the number of cookies per domain; the sweeper keeps the count low enough that
   this cap never becomes the new symptom.
@@ -332,10 +374,15 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 ### Development
 
 ```bash
-npm test        # dependency-free unit + integration + package-manifest tests (21 cases)
+npm test        # dependency-free unit + integration + package-manifest tests (31 cases)
 ```
 
 `test/purge.test.mjs` covers the helpers and the `writeHead` merge variants;
+`test/header-budget.test.mjs` covers raising the budget, restoring it (deleting the property returns
+to Node's default) and rejecting invalid values;
+`test/recovery.test.mjs` reproduces the whole failure against a real `node:http` server: 150 cookies
+(~17.7 KiB) first get `431`, the same request becomes `303` + 150 × `Max-Age=0` once the budget is
+raised, the next launch carries one cookie, and unloading the plugin puts the request back to `431`;
 `test/integration.test.mjs` runs a real `node:http` server and simulates 300 launches with a fresh
 authority each time, asserting the jar stays ≤ 4 cookies and the header stays < 2 KiB — then
 rehabilitates a 20-cookie poisoned jar in a single response.
@@ -354,6 +401,7 @@ Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port
 | authenticated follow-up | `200` |
 | valid cookie + 20 foreign | `200` + 20 × `Max-Age=0` |
 | 1 foreign + 5 KiB header | expiry (byte threshold) |
+| 150 cookies (17.7 KiB) + valid `?token=` | `303` + 150 × `Max-Age=0`, follow-up `200` (locked-out rescue) |
 
 ### License
 

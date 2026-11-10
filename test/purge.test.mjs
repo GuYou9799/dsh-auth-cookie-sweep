@@ -95,13 +95,15 @@ test("normalizeConfig clamps nonsense and keeps sane values", () => {
   assert.deepEqual(normalizeConfig(undefined), {
     minStaleCookies: 3,
     maxCookieHeaderBytes: 4096,
-    maxDeletions: 64,
+    maxDeletions: 256,
+    maxHeaderBytes: 131072,
     secure: undefined,
   });
   assert.deepEqual(normalizeConfig({ minStaleCookies: 0, maxCookieHeaderBytes: 1, maxDeletions: 9999, secure: true }), {
     minStaleCookies: 1,
     maxCookieHeaderBytes: 512,
     maxDeletions: 512,
+    maxHeaderBytes: 131072,
     secure: true,
   });
   assert.equal(normalizeConfig("nonsense").minStaleCookies, 3);

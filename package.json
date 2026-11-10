@@ -1,7 +1,7 @@
 {
   "name": "dsh-auth-cookie-sweep",
-  "version": "0.1.4",
-  "description": "Expire stale dsh-auth-* browser-session cookies so DeepSeek Harness keeps opening after months of launches.",
+  "version": "0.2.0",
+  "description": "Expire stale dsh-auth-* browser-session cookies, and rescue a DeepSeek Harness profile already locked out by a 431.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GuYou9799/dsh-auth-cookie-sweep.git"
@@ -32,14 +32,15 @@
     }
   },
   "scripts": {
-    "test": "node --test test/purge.test.mjs test/integration.test.mjs test/package-manifest.test.mjs"
+    "test": "node --test test/purge.test.mjs test/integration.test.mjs test/header-budget.test.mjs test/recovery.test.mjs test/package-manifest.test.mjs"
   },
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
     "cookies",
-    "web-authentication"
+    "web-authentication",
+    "desktop"
   ],
   "license": "MIT"
 }
