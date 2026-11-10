@@ -75,6 +75,43 @@ set-cookie: dsh-auth-Cv1vmX3…=; Max-Age=0; Path=/; Expires=Thu, 01 Jan 1970 00
 
 多开一个实例只会多一条 cookie，不受影响；长期反复启动也不可能再累积。
 
+### 体检页：随时看 jar 有多满（0.3.0 起）
+
+插件在**同一个 Host、同一个 origin**上开了一页只读体检：
+
+```
+http://127.0.0.1:<本次端口>/auth-cookie-sweep
+```
+
+和 DSH 本身一样需要登录 cookie，未认证时返回 Host 的 `401`。页面直接来自 Host 收到的请求，
+**不读取浏览器 cookie 数据库**，所以 DSH 运行时也能看、任何平台都能用，也不会被文件锁挡住。
+它显示：
+
+- 当前请求头占用 / 额度（含进度条）、`dsh-auth-*` 占了多少字节；
+- 当前 cookie 条数、历史峰值、单条平均大小，以及**按当前速度还能启动多少次**；
+- 最近见到的各个 `authority`（端口）及其 cookie 数；
+- 一个「立即清理旧 Cookie（保留当前会话）」按钮：POST 到 `auth-cookie-sweep/repair`，
+  清掉所有外来会话 cookie 后 `303` 回到应用。
+
+机器可读版本在同一 origin 的 `/auth-cookie-sweep/health.json`，适合脚本或监控：
+
+```bash
+curl -s -b "dsh-auth-……=……" http://127.0.0.1:<端口>/auth-cookie-sweep/health.json
+```
+
+```json
+{
+  "plugin": "dsh-auth-cookie-sweep",
+  "verdict": "healthy",
+  "headerBudget": 131072,
+  "current": { "cookies": 1, "headerBytes": 214 },
+  "launchesRemaining": 595
+}
+```
+
+`verdict` 为 `healthy` / `nearly-full`（< 10 次）/ `locked-out-or-close`（已满）/ `unknown`
+（还没有观测到请求）。不想暴露这一页就在配置里写 `health: false`。
+
 ### 安装
 
 本插件就是普通的 profile bundle（`dsh.bundle.patch` → `cordis.patch.yml` → 一行 `insert`）。
@@ -139,6 +176,7 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
         maxCookieHeaderBytes: 4096 # 512..16384，请求头多大就立刻清理
         maxDeletions: 256          # 1..512，单次响应最多下发多少条过期指令
         maxHeaderBytes: 131072     # 0..1048576，救援额度；0 关闭（不再修已锁死的 jar）
+        health: true               # false 关闭 /auth-cookie-sweep 体检页
         secure: false              # 省略则自动跟随 Host 协议
 ```
 
@@ -158,6 +196,12 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
   `dsh-client-connection` 逐字节一致）、陈旧判定、阈值策略，以及 `writeHead` 包装（兼容
   `(status, headers)`、`(status, message, headers)`、数组对形式的 headers，并合并
   `setHeader("set-cookie", …)` 已写入的 cookie）。
+- `lib/jar-health.js` —— 只保留「最后一次请求 / 峰值 / 最近 8 个 authority」的轻量记账，
+  用峰值条数估算单条大小，再按当前额度推算还能启动多少次；不持久化、不读 cookie 值。
+- `lib/health-page.js` —— 体检页与 `health.json` 的渲染，以及「立即清理」的 `303` 响应。
+  页面自带内联样式、`default-src 'none'` CSP、无脚本、无外部资源；authority 等插值一律 HTML 转义。
+- `lib/index.js` 用 `ctx.webServer.register({ kind: "exact", path, handler })` 挂三条精确路由，
+  每条都先过 `ctx.get("connection").authorizeIndex(request, response)`；卸载时随 effect 一并移除。
 - 除清理时的一行计数外不输出日志；cookie 的值不会被读取、保存或打印。
 
 #### 局限
@@ -170,7 +214,7 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 ### 开发
 
 ```bash
-npm test        # 零依赖的单元 + 集成 + 包清单测试（31 项）
+npm test        # 零依赖的单元 + 集成 + 包清单测试（45 项）
 ```
 
 `test/purge.test.mjs` 覆盖工具函数与 `writeHead` 合并的各种形态；
@@ -181,7 +225,11 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（31 项）
 `test/integration.test.mjs` 用真实 `node:http` 服务器模拟 300 次启动（每次一个新 authority），
 断言 jar 始终 ≤ 4 条、请求头始终 < 2 KiB，并在单个响应内修复一个 20 条 cookie 的中毒 jar；
 `test/package-manifest.test.mjs` 用与插件市场相同的严格解析器校验 `cordis.patch.yml`
-（只允许纯 `id`/`name` 的 `- insert:` 行），防止打包后再出现“已安装但重启也不生效”。
+（只允许纯 `id`/`name` 的 `- insert:` 行），防止打包后再出现“已安装但重启也不生效”；
+`test/jar-health.test.mjs` 覆盖体检记账（当前 / 峰值 / 预计次数 / authority 窗口）；
+`test/health-page.test.mjs` 覆盖 `verdict` 分档、HTML 转义与 CSP 形态、以及 `repair` 的有界过期；
+`test/health-routes.test.mjs` 用真实 `node:http` 服务器验证三条路由：未认证 `401`、页面与
+JSON `200`、`repair` `303` + 外来 cookie 过期且当前 cookie 保留、错误方法 `405`、卸载后路由消失。
 
 已在 DeepSeek Harness `0.2.2-rc.1` 上做过实际验证（真实 `dsh-host-webserver`、固定端口）：
 
@@ -194,6 +242,9 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（31 项）
 | 合法 cookie + 20 条外来 | `200` + 20 条 `Max-Age=0` |
 | 1 条外来 + 5 KiB 请求头 | 触发清理（字节阈值） |
 | 150 条 cookie（17.7 KiB）+ 合法 `?token=` | `303` + 150 条 `Max-Age=0`，下一次请求 `200`（已锁死恢复） |
+| 已认证 `GET /auth-cookie-sweep` | `200`，自带 CSP 的 HTML，显示当前条数 / 额度 / 预计还能启动多少次 |
+| 已认证 `POST /auth-cookie-sweep/repair` | `303` + 外来 cookie 的 `Max-Age=0`，当前会话保留 |
+| 未认证请求体检页 | Host 的 `401`（与其它页面一致） |
 
 ### 许可证
 
@@ -216,6 +267,7 @@ Symptom it fixes: after a few dozen launches, DSH stops opening — the web UI r
 - Keeps working across DSH updates (it only uses the public `webServer` service)
 - Rescues a profile already stuck at `431`: the request-header budget is raised and the old cookies
   are expired during that same launch
+- Shows the jar live at `/auth-cookie-sweep` — no cookie database, works while DSH is running
 - Test suite has no dependencies
 
 ### Why the cookies accumulate
@@ -273,6 +325,45 @@ cookie). The sweeper therefore cleans in two cases only:
 - the whole `Cookie` header is already at/over `maxCookieHeaderBytes` (default **4096**).
 
 One extra instance drifts by one cookie and is left alone; months of launches can never accumulate.
+
+### Health page (since 0.3.0)
+
+On the **same Host and origin** the plugin serves a read-only check-up:
+
+```
+http://127.0.0.1:<this-launch-port>/auth-cookie-sweep
+```
+
+It requires the same login cookie as DSH itself; unauthenticated callers get the Host's `401`. The
+numbers come straight from the requests the Host receives — **no browser cookie database is opened**
+— so it works while DSH is running, on every platform, with no file locks. It shows:
+
+- the current `Cookie` header usage against the budget (with a meter) and how many bytes are
+  `dsh-auth-*`;
+- current cookie count, all-time peak, average bytes per cookie, and **how many launches are left**
+  at the current rate;
+- the authorities (ports) seen recently, with their cookie counts;
+- a "sweep old cookies now (keep this session)" button: POSTs to `auth-cookie-sweep/repair`, expires
+  every foreign session cookie, and `303`s back to the app.
+
+A machine-readable twin lives at `/auth-cookie-sweep/health.json` for scripts and monitoring:
+
+```bash
+curl -s -b "dsh-auth-…=…" http://127.0.0.1:<port>/auth-cookie-sweep/health.json
+```
+
+```json
+{
+  "plugin": "dsh-auth-cookie-sweep",
+  "verdict": "healthy",
+  "headerBudget": 131072,
+  "current": { "cookies": 1, "headerBytes": 214 },
+  "launchesRemaining": 595
+}
+```
+
+`verdict` is `healthy`, `nearly-full` (< 10 launches), `locked-out-or-close` (none left), or
+`unknown` (no request observed yet). Set `health: false` to stop serving the page.
 
 ### Install
 
@@ -340,6 +431,7 @@ Optional `config` on the bundle's `insert` row:
         maxCookieHeaderBytes: 4096 # 512..16384, clean as soon as the header is this big
         maxDeletions: 256         # 1..512, expiries per response
         maxHeaderBytes: 131072    # 0..1048576, rescue budget; 0 disables rescue
+        health: true              # false stops serving /auth-cookie-sweep
         secure: false             # omit to follow the Host protocol automatically
 ```
 
@@ -360,6 +452,15 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
   (byte-compatible with `dsh-client-connection`), stale detection, threshold policy, and the
   `writeHead` wrapper (handles `(status, headers)`, `(status, message, headers)`, array-of-pairs
   headers, and merges a cookie already staged with `setHeader("set-cookie", …)`).
+- `lib/jar-health.js` — tiny bookkeeping: last request, peak, and the recent-8 authorities. Average
+  bytes per cookie times the current budget yields the launches-left estimate. Nothing persisted,
+  no cookie value read.
+- `lib/health-page.js` — renders the page and `health.json`, and builds the `303` repair response.
+  Inline styles only, `default-src 'none'` CSP, no scripts, no external assets; the authority is
+  HTML-escaped.
+- `lib/index.js` registers three `kind: "exact"` routes with `ctx.webServer.register(...)`, each
+  guarded by `ctx.get("connection").authorizeIndex(request, response)`; disposal follows the
+  plugin's effects.
 - Nothing is logged beyond a one-line count when cookies are expired; cookie values are never
   read, stored, or printed.
 
@@ -374,7 +475,7 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 ### Development
 
 ```bash
-npm test        # dependency-free unit + integration + package-manifest tests (31 cases)
+npm test        # dependency-free unit + integration + package-manifest tests (45 cases)
 ```
 
 `test/purge.test.mjs` covers the helpers and the `writeHead` merge variants;
@@ -389,6 +490,12 @@ rehabilitates a 20-cookie poisoned jar in a single response.
 `test/package-manifest.test.mjs` validates `cordis.patch.yml` with the same strict parser the plugin
 market uses (plain `id`/`name` insert rows only), so a published tarball can never again install as
 "installed, but still waiting for a restart".
+`test/jar-health.test.mjs` covers the bookkeeping (current, peak, launches-left, authority window);
+`test/health-page.test.mjs` covers the verdict thresholds, HTML escaping and CSP shape, and the
+bounded repair expiries;
+`test/health-routes.test.mjs` runs a real `node:http` server through the plugin and asserts the three
+routes: `401` unauthenticated, `200` for the page and JSON, `303` + foreign expiries (current cookie
+kept) for repair, `405` on a wrong method, and routes gone after disposal.
 
 Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port, real
 `dsh-host-webserver`):
@@ -402,6 +509,9 @@ Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port
 | valid cookie + 20 foreign | `200` + 20 × `Max-Age=0` |
 | 1 foreign + 5 KiB header | expiry (byte threshold) |
 | 150 cookies (17.7 KiB) + valid `?token=` | `303` + 150 × `Max-Age=0`, follow-up `200` (locked-out rescue) |
+| authenticated `GET /auth-cookie-sweep` | `200`, self-contained HTML with CSP, current count / budget / launches left |
+| authenticated `POST /auth-cookie-sweep/repair` | `303` + foreign `Max-Age=0`, current session kept |
+| unauthenticated health request | Host's `401` (same as its other pages) |
 
 ### License
 

@@ -162,6 +162,18 @@ test("attachCookiePurge merges a cookie set earlier with setHeader", () => {
   assert.deepEqual(response.seen.headers["set-cookie"], [minted, deletionCookie(staleName, false)]);
 });
 
+test("attachCookiePurge never emits one expiry twice", () => {
+  const authority = "127.0.0.1:54326";
+  const staleName = authCookieName("127.0.0.1:41000");
+  const request = requestWith({ host: authority, cookie: `${staleName}=v1.a` });
+  const response = responseStub();
+  attachCookiePurge(request, response, { minStaleCookies: 1, maxCookieHeaderBytes: 4096, maxDeletions: 64 });
+
+  // Another layer already staged the same expiry (the repair endpoint).
+  response.writeHead(303, { "set-cookie": [deletionCookie(staleName, false)], location: "./" });
+  assert.deepEqual(response.seen.headers["set-cookie"], [deletionCookie(staleName, false)]);
+});
+
 test("attachCookiePurge leaves responses alone below the threshold", () => {
   const authority = "127.0.0.1:54326";
   const staleName = authCookieName("127.0.0.1:41000");

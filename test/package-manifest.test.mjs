@@ -92,3 +92,8 @@ test("the hot-mount parser rejects a misspelled key (the 0.1.3 regression)", () 
     const broken = "- insert:\n    - id: dsh-auth-cookie-sweep\n      ndme: dsh-auth-cookie-sweep\n";
     assert.equal(parseSimplePatch(broken), null);
 });
+
+test("the version shown on the health page matches package.json", async () => {
+    const { VERSION } = await import("../lib/version.js");
+    assert.equal(VERSION, manifest.version, "bump lib/version.js with package.json");
+});
