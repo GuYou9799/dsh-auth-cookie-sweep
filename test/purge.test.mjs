@@ -220,7 +220,7 @@ test("plugin metadata and listener wiring", () => {
     },
   };
 
-  apply(ctx, { minStaleCookies: 1 });
+  apply(ctx, { minStaleCookies: 1, stateFile: "" });
   const listener = listeners.get("request");
   assert.equal(typeof listener, "function");
 
@@ -243,7 +243,7 @@ test("plugin apply refuses to crash a Host without a listener", () => {
     logger: { info() {}, warn: (message) => warnings.push(String(message)) },
     effect() {},
   };
-  apply(ctx, undefined);
+  apply(ctx, { stateFile: "" });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /no bound listener/u);
 });

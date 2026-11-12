@@ -63,7 +63,8 @@ test("normalizeConfig bounds and defaults the header budget", () => {
   assert.equal(normalizeConfig({}).maxHeaderBytes, 131072);
   assert.equal(normalizeConfig({ maxHeaderBytes: 0 }).maxHeaderBytes, 0, "0 disables the rescue");
   assert.equal(normalizeConfig({ maxHeaderBytes: 65536 }).maxHeaderBytes, 65536);
-  assert.equal(normalizeConfig({ maxHeaderBytes: 8 * 1024 * 1024 }).maxHeaderBytes, 1024 * 1024);
+  assert.equal(normalizeConfig({ maxHeaderBytes: 8 * 1024 * 1024 }).maxHeaderBytes, 8 * 1024 * 1024);
+  assert.equal(normalizeConfig({ maxHeaderBytes: 128 * 1024 * 1024 }).maxHeaderBytes, 64 * 1024 * 1024);
   assert.equal(normalizeConfig({ maxHeaderBytes: -5 }).maxHeaderBytes, 0);
   assert.equal(normalizeConfig({ maxHeaderBytes: 1.5 }).maxHeaderBytes, 131072);
   assert.equal(normalizeConfig({ maxHeaderBytes: "65536" }).maxHeaderBytes, 131072);

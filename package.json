@@ -1,7 +1,7 @@
 {
   "name": "dsh-auth-cookie-sweep",
-  "version": "0.3.0",
-  "description": "Expire stale dsh-auth-* browser-session cookies, rescue a DeepSeek Harness profile already locked out by a 431, and show the login-cookie jar live at /auth-cookie-sweep.",
+  "version": "0.4.0",
+  "description": "Expire stale dsh-auth-* browser-session cookies, rescue a DeepSeek Harness profile already locked out by a 431 (budget grows with the largest jar seen), and show the login-cookie jar live at /auth-cookie-sweep.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GuYou9799/dsh-auth-cookie-sweep.git"
@@ -32,7 +32,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/purge.test.mjs test/integration.test.mjs test/header-budget.test.mjs test/recovery.test.mjs test/jar-health.test.mjs test/health-page.test.mjs test/health-routes.test.mjs test/package-manifest.test.mjs"
+    "test": "node --test test/purge.test.mjs test/integration.test.mjs test/header-budget.test.mjs test/recovery.test.mjs test/jar-health.test.mjs test/health-page.test.mjs test/health-routes.test.mjs test/budget-state.test.mjs test/package-manifest.test.mjs"
   },
   "keywords": [
     "dsh",

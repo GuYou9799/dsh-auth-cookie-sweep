@@ -69,7 +69,7 @@ function harness() {
 
 test("the health routes are authenticated, readable, and repairable", async (t) => {
   const { ctx, routes, disposers, server } = harness();
-  apply(ctx, { minStaleCookies: 3, maxCookieHeaderBytes: 4096, maxDeletions: 256 });
+  apply(ctx, { minStaleCookies: 3, maxCookieHeaderBytes: 4096, maxDeletions: 256, stateFile: "" });
   assert.deepEqual([...routes.keys()].sort(), [HEALTH_JSON_PATH, HEALTH_PATH, REPAIR_PATH].sort());
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -123,7 +123,7 @@ test("the health routes are authenticated, readable, and repairable", async (t) 
 
 test("health can be disabled without touching the sweep", async (t) => {
   const { ctx, routes, disposers, server } = harness();
-  apply(ctx, { health: false, maxHeaderBytes: 0, minStaleCookies: 3 });
+  apply(ctx, { health: false, maxHeaderBytes: 0, minStaleCookies: 3, stateFile: "" });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => {
     for (const dispose of disposers) dispose();
