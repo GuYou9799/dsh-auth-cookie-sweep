@@ -1,7 +1,7 @@
 {
   "name": "dsh-auth-cookie-sweep",
-  "version": "1.0.0",
-  "description": "Expire stale dsh-auth-* browser-session cookies, rescue a DeepSeek Harness profile already locked out by a 431 (budget grows with the largest jar seen, with no ceiling), and show the login-cookie jar live at /auth-cookie-sweep.",
+  "version": "1.1.0",
+  "description": "Expire stale dsh-auth-* browser-session cookies, rescue a DeepSeek Harness profile already locked out by a 431 (budget grows with the largest jar seen, with no ceiling), and show the login-cookie jar live at /auth-cookie-sweep. Verified on DSH 0.2.2-rc.2.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GuYou9799/dsh-auth-cookie-sweep.git"

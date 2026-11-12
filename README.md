@@ -152,6 +152,7 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 #### 已经打不开了怎么办（431 / `Web authentication failed`）
 
 **0.2.0 起不用再手工清，0.4.0 起没有「太大就救不回来」的上限，1.0.0 起连上限常数也去掉了。**
+（桌面版如果已经能升级到 `0.2.2-rc.2`，官方外壳也会在启动时清掉遗留 cookie，见上一节。）
 救援额度会让那条原本被拒的请求进到 Host，清理又在同一个响应里完成，所以装好插件、重启一次 DSH，
 jar 就回到 1 条。
 
@@ -168,6 +169,25 @@ jar 就回到 1 条。
 - **桌面版（Electron）：** 退出 DeepSeek Harness，删除
   `%APPDATA%\@deepseek-ai\dsh-desktop\Network\Cookies` 与 `Network\Cookies-journal`，再启动。
   DSH 不依赖该存储里的其它 cookie。
+
+### 与 DSH 版本的关系（桌面版 0.2.2-rc.2 起官方已修）
+
+DeepSeek Harness `0.2.2-rc.2` 已经在桌面版外壳里修掉了这个问题，所以在本机桌面版上，本插件从
+“必需”变成“可选”：
+
+- **桌面版 ≥ `0.2.2-rc.2`：官方修复。** 外壳拿到 Host 的登录 cookie 后调用
+  `removeLegacyHostCookies(session.defaultSession.cookies, ready.url)`，删掉该 hostname（所有端口）
+  上遗留的全部 `dsh-auth-*`；同时 welcome 与页面转发改成每个请求显式携带当前 cookie、**不再使用
+  cookie jar**（`connectDesktopWelcome(hostUrl, cookie, send)`）。新 cookie 不再进罐子，旧 cookie 在
+  启动时被清掉，所以已经锁死的 profile 升级后启动一次即可恢复。
+- **Host 侧没有变。** `dsh-client-connection` 与 `dsh-host-webserver` 在 rc.2 里与 rc.1 字节完全相同
+  （44,434 B / 26,614 B），仍按 `host:port` 生成新 cookie，全仓库也搜不到任何 `Max-Age=0` 清理；
+  `dsh-desktop-host` 仍以 `--port 0` 启动。因此：
+  - **浏览器访问 `dsh web`（Edge/Chrome 自己的 cookie 罐）仍会累积**，这条路径官方没修，本插件继续适用；
+  - DSH ≤ `0.2.2-rc.1` 的桌面版仍然需要本插件（或等价的手工清理）。
+- 升级到 rc.2 会整体替换 `app.asar`，之前手工打的同类补丁会被覆盖，也不需要再打。
+- **1.1.0 就是在 `0.2.2-rc.2` 上重新验证的版本**：下方实测表里 3000 条 cookie（约 190 KiB 请求头）
+  的用例就运行在 rc.2 的真实 Host 上。
 
 ### 配置
 
@@ -223,7 +243,8 @@ jar 就回到 1 条。
 - **cookie 归属是 Web 平台的同源规则，不是插件选择。** 一个 jar 只要收到过 `dsh-auth-*`，就说明它在和
   某个 Host 说话；那个 Host 的响应里会清掉它自己那个 origin 的所有端口上的陈旧 cookie。其它 Host
   （别的端口、别的 profile、别的 hostname）的 jar 由它们各自的 Host 清理——任何宿主内插件都无法跨
-  origin 删除 cookie，这是浏览器强制的边界。
+  origin 删除 cookie，这是浏览器强制的边界。桌面版自 `0.2.2-rc.2` 起由外壳在启动时统一清理，
+  见「与 DSH 版本的关系」。
 - **不会撞上浏览器的单域条数上限。** 清理后 jar 只剩当前 Host 的 1 条（最多再留
   `minStaleCookies - 1` = 2 条），而常见上限是 Chrome/Firefox 180 条、Safari 约 600 条，
   所以条数上限不会变成新的症状；`test/integration.test.mjs` 在 300 次启动里逐次断言这一点。
@@ -250,7 +271,8 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（52 项）
 `test/health-routes.test.mjs` 用真实 `node:http` 服务器验证三条路由：未认证 `401`、页面与
 JSON `200`、`repair` `303` + 外来 cookie 过期且当前 cookie 保留、错误方法 `405`、卸载后路由消失。
 
-已在 DeepSeek Harness `0.2.2-rc.1` 上做过实际验证（真实 `dsh-host-webserver`、固定端口）：
+已在 DeepSeek Harness `0.2.2-rc.1` 与 `0.2.2-rc.2` 上做过实际验证（真实 `dsh-host-webserver`、固定端口；
+最后两行只在 rc.2 上跑过）：
 
 | 请求 | 结果 |
 | --- | --- |
@@ -264,6 +286,8 @@ JSON `200`、`repair` `303` + 外来 cookie 过期且当前 cookie 保留、错�
 | 已认证 `GET /auth-cookie-sweep` | `200`，自带 CSP 的 HTML，显示当前条数 / 额度 / 预计还能启动多少次 |
 | 已认证 `POST /auth-cookie-sweep/repair` | `303` + 外来 cookie 的 `Max-Age=0`，当前会话保留 |
 | 未认证请求体检页 | Host 的 `401`（与其它页面一致） |
+| 3000 条 cookie（约 190 KiB 请求头）+ 当前 cookie（rc.2） | `200` + 256 条 `Max-Age=0`，当前 cookie 保留（默认 128 KiB 额度下这条会先被 `431` 拒掉） |
+| 已认证 `GET /auth-cookie-sweep/health.json`（rc.2，存档峰值 4 MiB） | `200`，`headerBudget` = 16777216（峰值的 4 倍），`current.cookies` = 1 |
 
 ### 许可证
 
@@ -425,7 +449,8 @@ and the bundle entry to `~/.dsh/profiles/desktop/package.json` yourself and rest
 #### Already broken?
 
 **Since 0.2.0 you do not have to clear anything by hand; since 0.4.0 there is no
-"too big to rescue" limit; since 1.0.0 even the ceiling constant is gone.** The rescue budget lets
+"too big to rescue" limit; since 1.0.0 even the ceiling constant is gone.** (On the desktop app,
+upgrading to `0.2.2-rc.2` also clears legacy cookies at startup — see the compatibility section above.) The rescue budget lets
 the rejected request through, and the sweep finishes in that same response, so one restart after
 installing the plugin brings the jar back to a single cookie.
 
@@ -443,6 +468,29 @@ the cookies once — after that the sweeper keeps the jar small:
 - **Desktop app (Electron):** quit DeepSeek Harness, delete
   `%APPDATA%\@deepseek-ai\dsh-desktop\Network\Cookies` and `Network\Cookies-journal`, start it
   again. DSH does not depend on any other cookie in that store.
+
+### Compatibility with DSH releases (the desktop app is fixed upstream since 0.2.2-rc.2)
+
+DeepSeek Harness `0.2.2-rc.2` fixed this inside the desktop shell, so for the desktop app this plugin
+drops from "required" to "optional":
+
+- **Desktop app ≥ `0.2.2-rc.2`: fixed upstream.** After obtaining the Host's login cookie the shell
+  calls `removeLegacyHostCookies(session.defaultSession.cookies, ready.url)`, which deletes every
+  `dsh-auth-*` cookie left on that hostname (all ports). The welcome backend and the page forwarder
+  also switched to carrying the current cookie explicitly on each request — **no cookie jar**
+  (`connectDesktopWelcome(hostUrl, cookie, send)`). New cookies are never stored and legacy ones are
+  removed at startup, so a profile that was already locked out recovers on the first launch after
+  upgrading.
+- **The Host side is unchanged.** `dsh-client-connection` and `dsh-host-webserver` are byte-identical
+  between rc.1 and rc.2 (44,434 B / 26,614 B): still one new cookie per `host:port`, and no
+  `Max-Age=0` cleanup anywhere in the tree; `dsh-desktop-host` still starts with `--port 0`. So:
+  - **`dsh web` opened in a browser (Edge/Chrome's own cookie jar) still accumulates** — upstream did
+    not change that path, and this plugin still applies;
+  - desktop builds at or below `0.2.2-rc.1` still need this plugin (or an equivalent manual clean).
+- Upgrading to rc.2 replaces the whole `app.asar`, so any hand-applied patch of the same kind is
+  overwritten — and no longer needed.
+- **1.1.0 is the release re-verified on `0.2.2-rc.2`**: the 3,000-cookie (~190 KiB header) case in
+  the table below was run against a real rc.2 Host.
 
 ### Configuration
 
@@ -508,7 +556,8 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
   received a `dsh-auth-*` cookie was talking to some Host, and that Host's responses expire the stale
   cookies for every port on its own origin. Jars belonging to other Hosts (another port, another
   profile, another hostname) are cleaned by their own Host — no in-Host plugin can delete another
-  origin's cookies; the browser enforces that boundary.
+  origin's cookies; the browser enforces that boundary. Since `0.2.2-rc.2` the desktop shell also
+  clears legacy cookies at startup — see "Compatibility with DSH releases".
 - **The browser's per-domain cookie cap is never reached.** After a sweep the jar holds one cookie
   for the current Host (at most `minStaleCookies - 1` = 2 stragglers), while the usual caps are 180
   cookies in Chrome/Firefox and about 600 in Safari, so the count limit cannot become the new
@@ -542,8 +591,8 @@ bounded repair expiries;
 routes: `401` unauthenticated, `200` for the page and JSON, `303` + foreign expiries (current cookie
 kept) for repair, `405` on a wrong method, and routes gone after disposal.
 
-Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port, real
-`dsh-host-webserver`):
+Live check performed against DeepSeek Harness `0.2.2-rc.1` and `0.2.2-rc.2` (Host on a fixed port,
+real `dsh-host-webserver`; the last two rows were run on rc.2 only):
 
 | Request | Result |
 | --- | --- |
@@ -557,6 +606,8 @@ Live check performed against DeepSeek Harness `0.2.2-rc.1` (Host on a fixed port
 | authenticated `GET /auth-cookie-sweep` | `200`, self-contained HTML with CSP, current count / budget / launches left |
 | authenticated `POST /auth-cookie-sweep/repair` | `303` + foreign `Max-Age=0`, current session kept |
 | unauthenticated health request | Host's `401` (same as its other pages) |
+| 3,000 cookies (~190 KiB header) + current cookie (rc.2) | `200` + 256 × `Max-Age=0`, current cookie kept (the default 128 KiB budget rejects this one with `431` first) |
+| authenticated `GET /auth-cookie-sweep/health.json` (rc.2, stored peak 4 MiB) | `200`, `headerBudget` = 16777216 (4× the peak), `current.cookies` = 1 |
 
 ### License
 
