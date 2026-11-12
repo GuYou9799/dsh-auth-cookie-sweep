@@ -90,13 +90,15 @@ test("the launch jar stays bounded over hundreds of launches", async (t) => {
     settle(jar, authority, result);
     largestHeader = Math.max(largestHeader, result.cookieHeaderBytes);
 
-    // Without the sweeper this would be 300 cookies (~64 KiB header).
-    assert.ok(jar.size <= 4, `jar stayed small at launch ${launchIndex + 1}: ${jar.size}`);
+    // Without the sweeper this would be 300 cookies (~64 KiB header). With it,
+    // the jar holds the current launch plus at most minStaleCookies - 1 = 2
+    // stragglers, far below every browser's per-domain cap (Chrome 180).
+    assert.ok(jar.size <= 3, `jar stayed small at launch ${launchIndex + 1}: ${jar.size}`);
   }
 
   assert.ok(purges > 0, "the sweeper actually fired");
   assert.ok(largestHeader < 2048, `cookie header stayed small: ${largestHeader} bytes`);
-  assert.ok(jar.size <= 4);
+  assert.ok(jar.size <= 3);
 });
 
 test("a poisoned jar above the byte threshold is rehabilitated in one response", async (t) => {

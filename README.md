@@ -151,13 +151,14 @@ dsh --profile web --dump-config | grep -A2 auth-cookie-sweep
 
 #### 已经打不开了怎么办（431 / `Web authentication failed`）
 
-**0.2.0 起不用再手工清，0.4.0 起也没有「太大就救不回来」的上限。** 救援额度会让那条原本被拒的
-请求进到 Host，清理又在同一个响应里完成，所以装好插件、重启一次 DSH，jar 就回到 1 条。
+**0.2.0 起不用再手工清，0.4.0 起没有「太大就救不回来」的上限，1.0.0 起连上限常数也去掉了。**
+救援额度会让那条原本被拒的请求进到 Host，清理又在同一个响应里完成，所以装好插件、重启一次 DSH，
+jar 就回到 1 条。
 
 额度不是固定的：插件把「见过的最大 jar」记在 `$DSH_HOME/auth-cookie-sweep-state.json`（只有一个
-字节数和一个时间戳，不含 cookie 名或值），下次启动按它的 4 倍开额度（向上取整到 64 KiB，上限
-64 MiB）。所以哪怕 jar 已经涨到几十 MB，下一次启动仍然进得来，并当场清干净——不需要再手工删
-cookie 数据库。
+字节数和一个时间戳，不含 cookie 名或值），下次启动按它的 4 倍开额度（向上取整到 64 KiB，**不设上限**）。
+所以 jar 无论涨到多大，下一次启动仍然进得来，并当场清干净——不需要再手工删 cookie 数据库。
+额度也不预占内存：Node 只缓冲真正到达的请求头字节，而它们只可能来自本机回环。
 
 只有这两种情况还需要手工处理：用的是 0.2.0 之前的版本，或者把 `maxHeaderBytes` 设成了 `0`。
 做法是清一次 cookie，之后由插件长期压住：
@@ -180,14 +181,14 @@ cookie 数据库。
         minStaleCookies: 3         # 1..256，达到多少条外来 cookie 才清理
         maxCookieHeaderBytes: 4096 # 512..16384，请求头多大就立刻清理
         maxDeletions: 256          # 1..512，单次响应最多下发多少条过期指令
-        maxHeaderBytes: 131072     # 救援额度下限（最大 64 MiB）；0 关闭救援
+        maxHeaderBytes: 131072     # 救援额度下限（无上限）；0 关闭救援
         stateFile: "~/.dsh/auth-cookie-sweep-state.json"  # 记录历史最大 jar；"" 关闭持久化
         health: true               # false 关闭 /auth-cookie-sweep 体检页
         secure: false              # 省略则自动跟随 Host 协议
 ```
 
 `maxHeaderBytes` 只是**下限**：插件还会读取 `stateFile` 里的历史峰值，按峰值的 4 倍开额度
-（向上取整到 64 KiB），所以 jar 再大也会被下一次启动接住。
+（向上取整到 64 KiB，不设上限），所以 jar 再大也会被下一次启动接住。
 
 非法或越界取值会被收敛到安全范围，未知字段忽略。
 
@@ -202,7 +203,7 @@ cookie 数据库。
   `server.maxHeaderSize`，因此对一个已经 `listen()` 的服务器赋值同样生效（Node 24 实测）。
   默认 128 KiB 起，可配置、可还原。
 - `lib/budget-state.js` —— 记住历史最大 jar（只写一个字节数 + 时间戳，不含 cookie 名/值），
-  下次启动按峰值 ×4 开额度；缺失或损坏时回落到 128 KiB。64 MiB 只是防止状态文件被改坏的保护上限。
+  下次启动按峰值 ×4 开额度，**不设固定上限**；状态文件缺失或损坏时回落到 `maxHeaderBytes` 下限。
 - `lib/purge.js` —— 零依赖工具函数：authority 推导、cookie 名推导（与
   `dsh-client-connection` 逐字节一致）、陈旧判定、阈值策略，以及 `writeHead` 包装（兼容
   `(status, headers)`、`(status, message, headers)`、数组对形式的 headers，并合并
@@ -215,12 +216,17 @@ cookie 数据库。
   每条都先过 `ctx.get("connection").authorizeIndex(request, response)`；卸载时随 effect 一并移除。
 - 除清理时的一行计数外不输出日志；cookie 的值不会被读取、保存或打印。
 
-#### 局限
+#### 边界（不是待办）
 
-- 救援额度随历史峰值自动放大，所以不存在「jar 太大救不回来」的实际门槛；64 MiB 只是状态文件
-  损坏时的保护值（约三十万条 cookie，远超任何浏览器的单域上限）。
-- 只能过期到达本 Host 的 cookie；其它 origin / profile 的 jar 归它们自己管理。
-- 浏览器对单域名的 cookie 数量也有上限；本插件会把数量压得足够低，使该上限不会成为新的症状。
+- **救援额度没有上限。** 每次启动按历史峰值的 4 倍开额度，所以不存在「jar 太大救不回来」的阈值；
+  额度只放宽解析器愿意接收的字节数，不预占内存，且只对本机回环生效。
+- **cookie 归属是 Web 平台的同源规则，不是插件选择。** 一个 jar 只要收到过 `dsh-auth-*`，就说明它在和
+  某个 Host 说话；那个 Host 的响应里会清掉它自己那个 origin 的所有端口上的陈旧 cookie。其它 Host
+  （别的端口、别的 profile、别的 hostname）的 jar 由它们各自的 Host 清理——任何宿主内插件都无法跨
+  origin 删除 cookie，这是浏览器强制的边界。
+- **不会撞上浏览器的单域条数上限。** 清理后 jar 只剩当前 Host 的 1 条（最多再留
+  `minStaleCookies - 1` = 2 条），而常见上限是 Chrome/Firefox 180 条、Safari 约 600 条，
+  所以条数上限不会变成新的症状；`test/integration.test.mjs` 在 300 次启动里逐次断言这一点。
 
 ### 开发
 
@@ -231,7 +237,7 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（52 项）
 `test/purge.test.mjs` 覆盖工具函数与 `writeHead` 合并的各种形态；
 `test/header-budget.test.mjs` 覆盖额度的设置、还原（删除属性即回到 Node 默认）与非法取值；
 `test/budget-state.test.mjs` 覆盖历史峰值：`DSH_HOME` 解析、文件缺失/损坏、写入失败不抛异常、
-4 倍放大规则、64 MiB 保护上限，以及插件按存档峰值开额度并记录更大的峰值；
+4 倍放大规则（不设上限），以及插件按存档峰值开额度并记录更大的峰值；
 `test/recovery.test.mjs` 用真实 `node:http` 服务器复现完整故障：150 条 cookie（约 17.7 KiB）
 先拿到 `431`，放宽额度后同一条请求变成 `303` + 150 条 `Max-Age=0`，下一次启动只剩 1 条，
 而卸载插件后同样的请求又回到 `431`；
@@ -418,15 +424,16 @@ and the bundle entry to `~/.dsh/profiles/desktop/package.json` yourself and rest
 
 #### Already broken?
 
-**Since 0.2.0 you do not have to clear anything by hand, and since 0.4.0 there is no
-"too big to rescue" limit either.** The rescue budget lets the rejected request through, and the
-sweep finishes in that same response, so one restart after installing the plugin brings the jar
-back to a single cookie.
+**Since 0.2.0 you do not have to clear anything by hand; since 0.4.0 there is no
+"too big to rescue" limit; since 1.0.0 even the ceiling constant is gone.** The rescue budget lets
+the rejected request through, and the sweep finishes in that same response, so one restart after
+installing the plugin brings the jar back to a single cookie.
 
 The budget is not a constant: the plugin records the largest jar it has seen in
 `$DSH_HOME/auth-cookie-sweep-state.json` (one byte count and a timestamp — no cookie names or
-values) and opens the next launch at four times that peak, rounded up to 64 KiB. A jar that grew to
-tens of megabytes therefore still gets through and is cleaned in that response.
+values) and opens the next launch at four times that peak, rounded up to 64 KiB, **with no upper
+bound**. A jar of any size therefore still gets through and is cleaned in that response. The budget
+reserves no memory either: Node buffers only the header bytes that actually arrive, over loopback.
 
 Two cases still need a manual clean: a version before 0.2.0, or `maxHeaderBytes` set to `0`. Clear
 the cookies once — after that the sweeper keeps the jar small:
@@ -449,15 +456,15 @@ Optional `config` on the bundle's `insert` row:
         minStaleCookies: 3        # 1..256, foreign cookies before cleaning
         maxCookieHeaderBytes: 4096 # 512..16384, clean as soon as the header is this big
         maxDeletions: 256         # 1..512, expiries per response
-        maxHeaderBytes: 131072    # floor of the rescue budget (max 64 MiB); 0 disables rescue
+        maxHeaderBytes: 131072    # floor of the rescue budget (no upper bound); 0 disables rescue
         stateFile: "~/.dsh/auth-cookie-sweep-state.json"  # largest jar seen; "" disables persistence
         health: true              # false stops serving /auth-cookie-sweep
         secure: false             # omit to follow the Host protocol automatically
 ```
 
 `maxHeaderBytes` is only a **floor**: the plugin also reads the recorded peak from `stateFile` and
-opens the budget at four times that value (rounded up to 64 KiB), so a jar of any realistic size is
-rescued on the next launch.
+opens the budget at four times that value (rounded up to 64 KiB, with no upper bound), so a jar of
+any size is rescued on the next launch.
 
 Wrong or out-of-range values are clamped; unknown keys are ignored.
 
@@ -473,8 +480,9 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
   connection's parser, so assigning it on a server that is already listening takes effect (verified
   on Node 24). 128 KiB by default: configurable, restorable.
 - `lib/budget-state.js` — remembers the largest jar ever seen (one byte count, one timestamp; no
-  cookie names or values) and sizes the next launch at four times that peak. A missing or corrupt
-  file falls back to 128 KiB; the 64 MiB ceiling only guards against a hand-edited state file.
+  cookie names or values) and sizes the next launch at four times that peak, with **no fixed upper
+  bound**. A missing or corrupt file falls back to the `maxHeaderBytes` floor. The budget reserves no
+  memory: Node only buffers header bytes that actually arrive, over loopback.
 - `lib/purge.js` — dependency-free helpers: authority derivation, cookie-name derivation
   (byte-compatible with `dsh-client-connection`), stale detection, threshold policy, and the
   `writeHead` wrapper (handles `(status, headers)`, `(status, message, headers)`, array-of-pairs
@@ -491,14 +499,20 @@ Wrong or out-of-range values are clamped; unknown keys are ignored.
 - Nothing is logged beyond a one-line count when cookies are expired; cookie values are never
   read, stored, or printed.
 
-#### Limitations
+#### Boundaries (not a to-do list)
 
-- The rescue budget grows with the largest jar ever recorded, so there is no practical
-  "too large to rescue" threshold; the 64 MiB ceiling is a guard against a corrupted state file
-  (~300,000 cookies at the observed size — far beyond any browser's per-domain cap).
-- Only expires cookies that arrive at this Host; other origins/profiles keep their own jars.
-- Browsers also cap the number of cookies per domain; the sweeper keeps the count low enough that
-  this cap never becomes the new symptom.
+- **The rescue budget has no ceiling.** Every launch opens at four times the largest jar ever seen,
+  so there is no "too large to rescue" threshold. The limit only widens how many header bytes the
+  parser accepts; it reserves no memory, and it applies to the local loopback Host only.
+- **Cookie ownership is the web platform's same-origin rule, not a plugin choice.** A jar that ever
+  received a `dsh-auth-*` cookie was talking to some Host, and that Host's responses expire the stale
+  cookies for every port on its own origin. Jars belonging to other Hosts (another port, another
+  profile, another hostname) are cleaned by their own Host — no in-Host plugin can delete another
+  origin's cookies; the browser enforces that boundary.
+- **The browser's per-domain cookie cap is never reached.** After a sweep the jar holds one cookie
+  for the current Host (at most `minStaleCookies - 1` = 2 stragglers), while the usual caps are 180
+  cookies in Chrome/Firefox and about 600 in Safari, so the count limit cannot become the new
+  symptom; `test/integration.test.mjs` asserts this on every one of 300 launches.
 
 ### Development
 
@@ -510,7 +524,7 @@ npm test        # dependency-free unit + integration + package-manifest tests (5
 `test/header-budget.test.mjs` covers raising the budget, restoring it (deleting the property returns
 to Node's default) and rejecting invalid values;
 `test/budget-state.test.mjs` covers the recorded peak: `DSH_HOME` resolution, corrupt/missing files,
-failure-tolerant writes, the 4× growth rule, the 64 MiB guard, and a plugin launch that sizes itself
+failure-tolerant writes, the 4× growth rule (no ceiling), and a plugin launch that sizes itself
 from the stored peak then records a larger one;
 `test/recovery.test.mjs` reproduces the whole failure against a real `node:http` server: 150 cookies
 (~17.7 KiB) first get `431`, the same request becomes `303` + 150 × `Max-Age=0` once the budget is

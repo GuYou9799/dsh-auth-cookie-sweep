@@ -8,7 +8,6 @@ import { join } from "node:path";
 import {
   budgetFor,
   defaultStateFile,
-  MAX_BUDGET_BYTES,
   readPeakHeaderBytes,
   writePeakHeaderBytes,
 } from "../lib/budget-state.js";
@@ -76,13 +75,14 @@ test("persisting refuses nonsense without throwing", (t) => {
   assert.equal(writePeakHeaderBytes(join(blocked, "state.json"), 1024), false);
 });
 
-test("the budget grows past the configured floor but never past the ceiling", () => {
+test("the budget grows past the configured floor with no fixed ceiling", () => {
   assert.equal(budgetFor(128 * 1024, 0), 128 * 1024);
   assert.equal(budgetFor(128 * 1024, 17_698), 128 * 1024, "a small jar keeps the floor");
   assert.equal(budgetFor(128 * 1024, 2 * 1024 * 1024), 8 * 1024 * 1024);
   assert.equal(budgetFor(128 * 1024, 3 * 1024 * 1024), 12 * 1024 * 1024);
   assert.equal(budgetFor(128 * 1024, 3 * 1024 * 1024 + 1), 12 * 1024 * 1024 + 64 * 1024, "rounded up to 64 KiB");
-  assert.equal(budgetFor(128 * 1024, 32 * 1024 * 1024), MAX_BUDGET_BYTES);
+  assert.equal(budgetFor(128 * 1024, 32 * 1024 * 1024), 128 * 1024 * 1024);
+  assert.equal(budgetFor(128 * 1024, 2 * 1024 * 1024 * 1024), 8 * 1024 * 1024 * 1024, "no ceiling");
   assert.equal(budgetFor(0, 50 * 1024 * 1024), 0, "0 still disables the rescue");
   assert.equal(budgetFor(32 * 1024 * 1024, 1024), 32 * 1024 * 1024, "the floor can exceed the growth");
   assert.equal(budgetFor(128 * 1024, Number.NaN), 128 * 1024);
@@ -104,7 +104,7 @@ test("the plugin sizes this launch from the last launch's peak and records a new
   };
 
   apply(ctx, { stateFile, minStaleCookies: 3 });
-  assert.equal(server.maxHeaderSize, MAX_BUDGET_BYTES, "a 32 MiB peak reaches the 64 MiB guard");
+  assert.equal(server.maxHeaderSize, 128 * 1024 * 1024, "a 32 MiB peak opens a 128 MiB budget");
 
   // A request larger than the recorded peak raises the record for next launch.
   const listener = server.listeners("request")[0];
@@ -120,7 +120,7 @@ test("the plugin sizes this launch from the last launch's peak and records a new
   };
   listener(request, response);
 
-  assert.equal(server.maxHeaderSize, MAX_BUDGET_BYTES);
+  assert.equal(server.maxHeaderSize, 128 * 1024 * 1024);
   assert.ok(readPeakHeaderBytes(stateFile) > 0);
 
   for (const dispose of disposers) dispose();
