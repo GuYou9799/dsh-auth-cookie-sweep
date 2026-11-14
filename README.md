@@ -180,14 +180,14 @@ DeepSeek Harness `0.2.2-rc.2` 已经在桌面版外壳里修掉了这个问题�
   上遗留的全部 `dsh-auth-*`；同时 welcome 与页面转发改成每个请求显式携带当前 cookie、**不再使用
   cookie jar**（`connectDesktopWelcome(hostUrl, cookie, send)`）。新 cookie 不再进罐子，旧 cookie 在
   启动时被清掉，所以已经锁死的 profile 升级后启动一次即可恢复。
-- **Host 侧没有变。** `dsh-client-connection` 与 `dsh-host-webserver` 在 rc.2 里与 rc.1 字节完全相同
+- **Host 侧没有变。** `dsh-client-connection` 与 `dsh-host-webserver` 在 rc.2 与 rc.3 里都与 rc.1 字节完全相同
   （44,434 B / 26,614 B），仍按 `host:port` 生成新 cookie，全仓库也搜不到任何 `Max-Age=0` 清理；
   `dsh-desktop-host` 仍以 `--port 0` 启动。因此：
   - **浏览器访问 `dsh web`（Edge/Chrome 自己的 cookie 罐）仍会累积**，这条路径官方没修，本插件继续适用；
   - DSH ≤ `0.2.2-rc.1` 的桌面版仍然需要本插件（或等价的手工清理）。
-- 升级到 rc.2 会整体替换 `app.asar`，之前手工打的同类补丁会被覆盖，也不需要再打。
-- **1.1.0 就是在 `0.2.2-rc.2` 上重新验证的版本**：下方实测表里 3000 条 cookie（约 190 KiB 请求头）
-  的用例就运行在 rc.2 的真实 Host 上。
+- 升级到 rc.2 或 rc.3 会整体替换 `app.asar`，之前手工打的同类补丁会被覆盖，也不需要再打。
+- **1.2.0 就是在 `0.2.2-rc.3` 上重新验证的版本**：下方实测表里 3000 条 cookie（约 190 KiB 请求头）
+  的用例就运行在 rc.3 的真实 Host 上（rc.2 与 rc.3 的 Host 包逐字节一致，行为相同）。
 
 ### 配置
 
@@ -271,8 +271,8 @@ npm test        # 零依赖的单元 + 集成 + 包清单测试（52 项）
 `test/health-routes.test.mjs` 用真实 `node:http` 服务器验证三条路由：未认证 `401`、页面与
 JSON `200`、`repair` `303` + 外来 cookie 过期且当前 cookie 保留、错误方法 `405`、卸载后路由消失。
 
-已在 DeepSeek Harness `0.2.2-rc.1` 与 `0.2.2-rc.2` 上做过实际验证（真实 `dsh-host-webserver`、固定端口；
-最后两行只在 rc.2 上跑过）：
+已在 DeepSeek Harness `0.2.2-rc.1`、`0.2.2-rc.2` 与 `0.2.2-rc.3` 上做过实际验证（真实 `dsh-host-webserver`、
+固定端口；最后两行在 rc.2 与 rc.3 上都跑过，Host 包逐字节一致）：
 
 | 请求 | 结果 |
 | --- | --- |
@@ -286,8 +286,8 @@ JSON `200`、`repair` `303` + 外来 cookie 过期且当前 cookie 保留、错�
 | 已认证 `GET /auth-cookie-sweep` | `200`，自带 CSP 的 HTML，显示当前条数 / 额度 / 预计还能启动多少次 |
 | 已认证 `POST /auth-cookie-sweep/repair` | `303` + 外来 cookie 的 `Max-Age=0`，当前会话保留 |
 | 未认证请求体检页 | Host 的 `401`（与其它页面一致） |
-| 3000 条 cookie（约 190 KiB 请求头）+ 当前 cookie（rc.2） | `200` + 256 条 `Max-Age=0`，当前 cookie 保留（默认 128 KiB 额度下这条会先被 `431` 拒掉） |
-| 已认证 `GET /auth-cookie-sweep/health.json`（rc.2，存档峰值 4 MiB） | `200`，`headerBudget` = 16777216（峰值的 4 倍），`current.cookies` = 1 |
+| 3000 条 cookie（约 190 KiB 请求头）+ 当前 cookie（rc.2 / rc.3） | `200` + 256 条 `Max-Age=0`，当前 cookie 保留（默认 128 KiB 额度下这条会先被 `431` 拒掉） |
+| 已认证 `GET /auth-cookie-sweep/health.json`（rc.2 / rc.3，存档峰值 4 MiB） | `200`，`headerBudget` = 16777216（峰值的 4 倍），`current.cookies` = 1 |
 
 ### 许可证
 
@@ -482,15 +482,16 @@ drops from "required" to "optional":
   removed at startup, so a profile that was already locked out recovers on the first launch after
   upgrading.
 - **The Host side is unchanged.** `dsh-client-connection` and `dsh-host-webserver` are byte-identical
-  between rc.1 and rc.2 (44,434 B / 26,614 B): still one new cookie per `host:port`, and no
+  across rc.1, rc.2 and rc.3 (44,434 B / 26,614 B): still one new cookie per `host:port`, and no
   `Max-Age=0` cleanup anywhere in the tree; `dsh-desktop-host` still starts with `--port 0`. So:
   - **`dsh web` opened in a browser (Edge/Chrome's own cookie jar) still accumulates** — upstream did
     not change that path, and this plugin still applies;
   - desktop builds at or below `0.2.2-rc.1` still need this plugin (or an equivalent manual clean).
-- Upgrading to rc.2 replaces the whole `app.asar`, so any hand-applied patch of the same kind is
-  overwritten — and no longer needed.
-- **1.1.0 is the release re-verified on `0.2.2-rc.2`**: the 3,000-cookie (~190 KiB header) case in
-  the table below was run against a real rc.2 Host.
+- Upgrading to rc.2 or rc.3 replaces the whole `app.asar`, so any hand-applied patch of the same kind
+  is overwritten — and no longer needed.
+- **1.2.0 is the release re-verified on `0.2.2-rc.3`**: the 3,000-cookie (~190 KiB header) case in
+  the table below was run against a real rc.3 Host (its Host packages are byte-identical to rc.2, so
+  the behaviour is the same).
 
 ### Configuration
 
@@ -591,8 +592,9 @@ bounded repair expiries;
 routes: `401` unauthenticated, `200` for the page and JSON, `303` + foreign expiries (current cookie
 kept) for repair, `405` on a wrong method, and routes gone after disposal.
 
-Live check performed against DeepSeek Harness `0.2.2-rc.1` and `0.2.2-rc.2` (Host on a fixed port,
-real `dsh-host-webserver`; the last two rows were run on rc.2 only):
+Live check performed against DeepSeek Harness `0.2.2-rc.1`, `0.2.2-rc.2` and `0.2.2-rc.3` (Host on a
+fixed port, real `dsh-host-webserver`; the last two rows were run on rc.2 and rc.3, whose Host
+packages are byte-identical):
 
 | Request | Result |
 | --- | --- |
@@ -606,8 +608,8 @@ real `dsh-host-webserver`; the last two rows were run on rc.2 only):
 | authenticated `GET /auth-cookie-sweep` | `200`, self-contained HTML with CSP, current count / budget / launches left |
 | authenticated `POST /auth-cookie-sweep/repair` | `303` + foreign `Max-Age=0`, current session kept |
 | unauthenticated health request | Host's `401` (same as its other pages) |
-| 3,000 cookies (~190 KiB header) + current cookie (rc.2) | `200` + 256 × `Max-Age=0`, current cookie kept (the default 128 KiB budget rejects this one with `431` first) |
-| authenticated `GET /auth-cookie-sweep/health.json` (rc.2, stored peak 4 MiB) | `200`, `headerBudget` = 16777216 (4× the peak), `current.cookies` = 1 |
+| 3,000 cookies (~190 KiB header) + current cookie (rc.2 / rc.3) | `200` + 256 × `Max-Age=0`, current cookie kept (the default 128 KiB budget rejects this one with `431` first) |
+| authenticated `GET /auth-cookie-sweep/health.json` (rc.2 / rc.3, stored peak 4 MiB) | `200`, `headerBudget` = 16777216 (4× the peak), `current.cookies` = 1 |
 
 ### License
 
